@@ -5,11 +5,11 @@ Implemented dependence format on data type, conversion SQL query into sheet with
 
 ### Installation ###
 
-The installer is [pgxls_init.sql](https://github.com/PGSuite/PGXLS/raw/main/pgxls_init.sql) file that creates `pgxls` schema with the necessary procedures.  
+The installer is [pgxls.sql](https://github.com/PGSuite/PGXLS/raw/main/pgxls.sql) file that creates `pgxls` schema with the necessary procedures.  
 The installation consists in executing it in the psql terminal client or SQL manager, for example:  
 
 ```bash
-curl https://github.com/PGSuite/PGXLS/raw/main/pgxls_init.sql | psql [database]
+curl https://github.com/PGSuite/PGXLS/raw/main/pgxls.sql | psql [database]
 ```
 ### Extension ###
 
