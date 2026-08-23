@@ -15,8 +15,8 @@ begin
   -- Add sheet 
   call pgxls.add_sheet(xls, array[10,15,50,15], array['OID','Schema','Table name','Owner'], 'Columns');
   --  Set format for new rows, current row with header not changed
-  call pgxls.set_column_default_format_numeric(xls, 1, format_code=>pgxls.get_format_code_numeric(decimal_places=>0, thousands_separated=>true));
-  call pgxls.set_column_default_format_numeric(xls, 4, font_size=>10);
+  call pgxls.set_column_format_numeric(xls, 1, format_code=>pgxls.get_format_code_numeric(decimal_places=>0, thousands_separated=>true));
+  call pgxls.set_column_format_numeric(xls, 4, font_size=>10);
   for rec in
       select oid,relnamespace::regnamespace as schema,
              relname                        as table_name,

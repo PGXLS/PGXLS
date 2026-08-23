@@ -58,7 +58,7 @@
 .background-tr-header {
     #background: #F2F2F2;
     #font-weight: bold;
-    background: #F0F0F0;
+    background: #E8E8E8;
 }
 
 .background-tr-even {
@@ -285,7 +285,7 @@ a, a:link, a:active, a:visited {
 }
 
 .table-doc tr td {
-    padding: 3px 10px;
+    padding: 5px 10px;
 }
 
 .div-download {
@@ -586,11 +586,11 @@ a, a:link, a:active, a:visited {
 <br>
 <ul style="list-style-type: none;">
 <li style="list-style-type: disc;"><a href="#format" style="text-decoration: none;">Formatting</a></li>
-<li><a href="#set_column_default_format_type"> set_column_default_format </a></li>
-<li><a href="#set_row_default_format">         set_row_default_format    </a></li>
-<li><a href="#format_row">                     format_row                </a></li>
-<li><a href="#set_row_height">                 set_row_height            </a></li>
-<li><a href="#format_cell">                    format_cell               </a></li>
+<li><a href="#set_column_format_type"> set_column_format_[type] </a></li>
+<li><a href="#set_row_default_format"> set_row_default_format   </a></li>
+<li><a href="#format_row">             format_row               </a></li>
+<li><a href="#set_row_height">         set_row_height           </a></li>
+<li><a href="#format_cell">            format_cell              </a></li>
 </ul>
 <br>
 <ul style="list-style-type: none;">
@@ -641,13 +641,15 @@ builds and returns file (<a href="#get_file">pgxls.get_file</a>).
 <br>
 <br>
 The column count and column widths are determined when creating a document or adding a sheet.
-For each column, you can override the style depending on data type using procedures <a href="#set_column_default_format_type">pgxls.set_column_default_format_[type]</a>.
+For each column, you can override the style depending on data type using procedures <a href="#set_column_format_type">pgxls.set_column_format_[type]</a>.
 The <a href="#set_row_default_format">set_row_default_format</a> procedure sets the formatting for all columns and all data types.
 The formatting set by these procedures only applies to subsequent rows; it does not change the formatting for the current or previous rows.
 <br>
 <br>
 The <a href="#put_cell">pgxls.put_cell</a> procedure sets the cell value and format depending on the value type (set for column),
 has optional parameters to change formatting properties.
+When creating large files, it is recommended to use <a href="#put_cell_type">pgxls.put_cell_[type]</a> procedures with an explicit type specified for cell population
+� they perform faster because they skip dynamic type analysis and do not process formatting parameters.
 <br>
 <br>
 The <a href="#format_cell">pgxls.format_cell</a> and <a href="#format_row">pgxls.format_row</a> procedures change the formatting of the current cell and row.
@@ -670,12 +672,12 @@ using procedures
 <a href="#set_page_margins">pgxls.set_page_margins</a>.
 <br>
 <br>
-When creating large files, you must use the procedures <a href="#put_cell_type">pgxls.put_cell_[type]</a> to set cells
-and get a file as a stream (<a href="#get_query_file_stream">pgxls.get_query_file_stream</a>).
-<br>
-<br>
 There are functions <a href="#get_file_by_query">pgxls.get_file_by_query</a> and <a href="#add_sheet_by_query">pgxls.add_sheet_by_query</a>
 to get the file and add sheet by SQL query.
+<br>
+<br>
+Once the data is generated in the temporary table, the Excel file can be retrieved as a <em>bytea</em> byte array (<a href="#get_file">pgxls.get_file</a> function)
+or as a <em>setof bytea</em> stream (<a href="#get_query_file_stream">pgxls.get_query_file_stream</a> function) to avoid out-of-memory errors.
 <br>
 <br>
 Procedures <a href="#save_file">pgxls.save_file</a> and <a href="#save_file_by_query">pgxls.save_file_by_query</a>  
@@ -885,9 +887,9 @@ Examples
   <span class="color-source-sql-comment">-- Add sheet named "Columns"</span>
   <span class="color-source-sql-keyword">call</span> pgxls.add_sheet(xls, <span class="color-source-sql-keyword">array</span>[10,15,50], <span class="color-source-sql-keyword">array</span>[<span class="color-source-sql-string">'x'</span>,<span class="color-source-sql-string">'x/3'</span>,<span class="color-source-sql-string">'md5(x)'</span>], <span class="color-source-sql-string">'Columns'</span>);
   <span class="color-source-sql-comment">-- Set format of column for numeric type </span>
-  <span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format_numeric(xls, 2, format_code=&#62;<span class="color-source-sql-string">'0.0000'</span>, font_name=&#62;pgxls.get_font_name(<span class="color-source-sql-string">'sans_serif'</span>));
+  <span class="color-source-sql-keyword">call</span> pgxls.set_column_format_numeric(xls, 2, format_code=&#62;<span class="color-source-sql-string">'0.0000'</span>, font_name=&#62;pgxls.get_font_name(<span class="color-source-sql-string">'sans_serif'</span>));
   <span class="color-source-sql-comment">-- Set alignment of column for all types</span>
-  <span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format(xls, 3, alignment_horizontal=&#62;<span class="color-source-sql-string">'center'</span>);
+  <span class="color-source-sql-keyword">call</span> pgxls.set_column_format(xls, 3, alignment_horizontal=&#62;<span class="color-source-sql-string">'center'</span>);
   <span class="color-source-sql-comment">-- Set cell values, style defined by column and data type</span>
   <span class="color-source-sql-keyword">for</span> x <span class="color-source-sql-keyword">in</span> 1..10 loop
     <span class="color-source-sql-keyword">call</span> pgxls.add_row(xls);
@@ -910,8 +912,8 @@ Examples
   <span class="color-source-sql-comment">--------------------------------------------------------------------------------------------------------------------------------</span>
   <span class="color-source-sql-comment">-- Add sheet with wrap text</span>
   <span class="color-source-sql-keyword">call</span> pgxls.add_sheet(xls, <span class="color-source-sql-keyword">array</span>[40,30], <span class="color-source-sql-keyword">name</span>=&#62;<span class="color-source-sql-string">'Wrap text'</span>);
-  <span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format(xls, 1, alignment_horizontal=&#62;<span class="color-source-sql-string">'justify'</span>, alignment_text_wrap=&#62;<span class="color-source-sql-keyword">true</span>);
-  <span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format(xls, 2, alignment_text_wrap=&#62;<span class="color-source-sql-keyword">true</span>); 
+  <span class="color-source-sql-keyword">call</span> pgxls.set_column_format(xls, 1, alignment_horizontal=&#62;<span class="color-source-sql-string">'justify'</span>, alignment_text_wrap=&#62;<span class="color-source-sql-keyword">true</span>);
+  <span class="color-source-sql-keyword">call</span> pgxls.set_column_format(xls, 2, alignment_text_wrap=&#62;<span class="color-source-sql-keyword">true</span>); 
   <span class="color-source-sql-comment">-- Text without line feed</span>
   <span class="color-source-sql-keyword">call</span> pgxls.put_cell_text(xls, <span class="color-source-sql-string">'A database management system used to maintain relational databases is a relational database management system (RDBMS)'</span>);
   <span class="color-source-sql-keyword">call</span> pgxls.put_cell(xls, <span class="color-source-sql-string">'Row height calculated with assumptions and may be not optimal, usually line count is slightly larger'</span>::<span class="color-source-sql-keyword">text</span>, font_size=&#62;8); 
@@ -933,8 +935,8 @@ Examples
   <span class="color-source-sql-keyword">call</span> pgxls.set_row_default_format(xls, border=&#62;<span class="color-source-sql-string">'thin'</span>);
   <span class="color-source-sql-keyword">call</span> pgxls.add_row_texts(xls, <span class="color-source-sql-keyword">array</span>[<span class="color-source-sql-string">'x'</span>,<span class="color-source-sql-string">'√x'</span>,<span class="color-source-sql-string">'x²'</span>,<span class="color-source-sql-string">'md5(x)'</span>], font_bold=&#62;<span class="color-source-sql-keyword">true</span>, fill_foreground_color=&#62;<span class="color-source-sql-string">'dark_gray'</span>, alignment_horizontal=&#62;<span class="color-source-sql-string">'center'</span>);
   <span class="color-source-sql-keyword">call</span> pgxls.set_row_default_format(xls, fill_foreground_color=&#62;<span class="color-source-sql-string">'light_gray'</span>);
-  <span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format_numeric(xls, 2, format_code=&#62;<span class="color-source-sql-string">'0.0000'</span>);
-  <span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format(xls, 4, alignment_horizontal=&#62;<span class="color-source-sql-string">'center'</span>);
+  <span class="color-source-sql-keyword">call</span> pgxls.set_column_format_numeric(xls, 2, format_code=&#62;<span class="color-source-sql-string">'0.0000'</span>);
+  <span class="color-source-sql-keyword">call</span> pgxls.set_column_format(xls, 4, alignment_horizontal=&#62;<span class="color-source-sql-string">'center'</span>);
   <span class="color-source-sql-keyword">for</span> x <span class="color-source-sql-keyword">in</span> 1..100 loop
     <span class="color-source-sql-keyword">call</span> pgxls.add_row(xls);
     <span class="color-source-sql-keyword">call</span> pgxls.put_cell(xls, x);
@@ -974,8 +976,8 @@ Examples
   <span class="color-source-sql-comment">-- Add sheet </span>
   <span class="color-source-sql-keyword">call</span> pgxls.add_sheet(xls, <span class="color-source-sql-keyword">array</span>[10,15,50,15], <span class="color-source-sql-keyword">array</span>[<span class="color-source-sql-string">'OID'</span>,<span class="color-source-sql-string">'Schema'</span>,<span class="color-source-sql-string">'Table name'</span>,<span class="color-source-sql-string">'Owner'</span>], <span class="color-source-sql-string">'Columns'</span>);
   <span class="color-source-sql-comment">--  Set format for new rows, current row with header not changed</span>
-  <span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format_numeric(xls, 1, format_code=&#62;pgxls.get_format_code_numeric(decimal_places=&#62;0, thousands_separated=&#62;<span class="color-source-sql-keyword">true</span>));
-  <span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format_numeric(xls, 4, font_size=&#62;10);
+  <span class="color-source-sql-keyword">call</span> pgxls.set_column_format_numeric(xls, 1, format_code=&#62;pgxls.get_format_code_numeric(decimal_places=&#62;0, thousands_separated=&#62;<span class="color-source-sql-keyword">true</span>));
+  <span class="color-source-sql-keyword">call</span> pgxls.set_column_format_numeric(xls, 4, font_size=&#62;10);
   <span class="color-source-sql-keyword">for</span> rec <span class="color-source-sql-keyword">in</span>
       <span class="color-source-sql-keyword">select</span> oid,relnamespace::regnamespace <span class="color-source-sql-keyword">as</span> <span class="color-source-sql-keyword">schema</span>,
              relname                        <span class="color-source-sql-keyword">as</span> table_name,
@@ -1023,7 +1025,7 @@ Examples
   <span class="color-source-sql-keyword">call</span> pgxls.put_cell(xls, <span class="color-source-sql-string">'10 sheets * 4 columns * 100K rows = 40M cells'</span>::<span class="color-source-sql-keyword">text</span>);
   <span class="color-source-sql-keyword">for</span> v_sheet <span class="color-source-sql-keyword">in</span> 1..10 loop
     <span class="color-source-sql-keyword">call</span> pgxls.add_sheet(xls, <span class="color-source-sql-keyword">array</span>[10,10,10,50], <span class="color-source-sql-keyword">array</span>[<span class="color-source-sql-string">'Sheet'</span>,<span class="color-source-sql-string">'Row'</span>,<span class="color-source-sql-string">'Value'</span>,<span class="color-source-sql-string">'md5'</span>], v_sheet::<span class="color-source-sql-keyword">text</span>);
-    <span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format(xls, 4, font_name=&#62;pgxls.get_font_name(<span class="color-source-sql-string">'monospace'</span>));
+    <span class="color-source-sql-keyword">call</span> pgxls.set_column_format(xls, 4, font_name=&#62;pgxls.get_font_name(<span class="color-source-sql-string">'monospace'</span>));
     <span class="color-source-sql-keyword">for</span> v_row <span class="color-source-sql-keyword">in</span> 1..100000 loop          
       v_value := v_sheet*v_row;
       <span class="color-source-sql-keyword">call</span> pgxls.add_row(xls);
@@ -1038,10 +1040,13 @@ Examples
 <span class="color-source-sql-keyword">end</span>
 <span class="color-source-sql-block-border">&dollar;&dollar;</span>;
 
-<span class="color-source-sql-comment">-- Get large file by parts</span>
-<span class="color-source-sql-comment">-- Each row is a bytea that must be read separately to avoid OutOfMemory error on the client </span>
-<span class="color-source-sql-comment">-- Example, psql -Aqt -c "select excel_large_file()" | xxd -r -ps &#62; excel_large_file.xlsx</span>
+<span class="color-source-sql-comment">-- Retrieve a large file in chunks</span>
+<span class="color-source-sql-comment">-- Each row is a bytea chunk and must be read separately to avoid OutOfMemory error on the client</span>
 <span class="color-source-sql-keyword">select</span> excel_large_file();
+
+<span class="color-source-sql-comment">-- When using the command line, strip the leading \x from each line using cut before xxd</span>
+<span class="color-source-sql-comment">-- Example:</span>
+<span class="color-source-sql-comment">--   psql -Aqt -c "select excel_large_file()" | cut -c3- | xxd -r -p &#62; excel_large_file.xlsx</span>
 </pre>
 </div>
 <br>
@@ -1494,9 +1499,9 @@ Formatting
 </div>
 
 <br>
-<a id="set_column_default_format_type"></a>
-<h3 style="font-size:larger; padding: 5px 0px 5px 5px; display: inline;">pgxls.set_column_default_format_[type]</h3><br><br>
-The procedure sets the format of the column cells for subsequent rows depending on the data type.<br>If the data type is not specified (procedure pgxls.set_column_default_format), then format set for all types
+<a id="set_column_format_type"></a>
+<h3 style="font-size:larger; padding: 5px 0px 5px 5px; display: inline;">pgxls.set_column_format_[type]</h3><br><br>
+The procedure sets the format of the column cells for subsequent rows depending on the data type.<br>If the data type is not specified (procedure pgxls.set_column_format), then format set for all types
 <br>
 <br>Parameters<br>
 <table class="table-doc border-color-table">
@@ -1505,7 +1510,7 @@ The procedure sets the format of the column cells for subsequent rows depending 
     <tr><td style="white-space: nowrap;">type</td><td style="white-space: nowrap;"></td><td >data type:<br>text,integer,numeric,date,time,timestamp,boolean</td><td class="td-align-center">&#x2714;</td><td class="td-align-center"></td></tr>
     <tr class="background-tr-even"><td style="white-space: nowrap;">xls</td><td style="white-space: nowrap;">pgxls.xls</td><td >document</td><td class="td-align-center">&#x2714;</td><td class="td-align-center"></td></tr>
     <tr><td style="white-space: nowrap;">column_</td><td style="white-space: nowrap;">int</td><td >column</td><td class="td-align-center"></td><td class="td-align-center">current</td></tr>
-    <tr class="background-tr-even"><td style="white-space: nowrap;">format_code</td><td style="white-space: nowrap;">varchar</td><td >format code,<br>missing in the procedure <em>pgxls.set_column_default_format</em></td><td class="td-align-center"></td><td class="td-align-center"></td></tr>
+    <tr class="background-tr-even"><td style="white-space: nowrap;">format_code</td><td style="white-space: nowrap;">varchar</td><td >format code,<br>missing in the procedure <em>pgxls.set_column_format</em></td><td class="td-align-center"></td><td class="td-align-center"></td></tr>
     <tr><td style="white-space: nowrap;">font_name</td><td style="white-space: nowrap;">varchar</td><td >font name</td><td class="td-align-center"></td><td class="td-align-center"></td></tr>
     <tr class="background-tr-even"><td style="white-space: nowrap;">font_size</td><td style="white-space: nowrap;">int</td><td >font size</td><td class="td-align-center"></td><td class="td-align-center"></td></tr>
     <tr><td style="white-space: nowrap;">font_bold</td><td style="white-space: nowrap;">boolean</td><td >bold font</td><td class="td-align-center"></td><td class="td-align-center"></td></tr>
@@ -1528,14 +1533,14 @@ The procedure sets the format of the column cells for subsequent rows depending 
 <br>
 Examples<br>
 <div class="div-source-code border-color-div-source-code" style="height: 174px;">
-<pre><span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format_numeric(xls, font_size=&#62;10, font_bold=&#62;<span class="color-source-sql-keyword">true</span>, fill_foreground_color=&#62;<span class="color-source-sql-string">'light_green'</span>);
-<span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format(xls, border_around=&#62;<span class="color-source-sql-string">'thin'</span>, alignment_horizontal=&#62;<span class="color-source-sql-string">'center'</span>);
+<pre><span class="color-source-sql-keyword">call</span> pgxls.set_column_format_numeric(xls, font_size=&#62;10, font_bold=&#62;<span class="color-source-sql-keyword">true</span>, fill_foreground_color=&#62;<span class="color-source-sql-string">'light_green'</span>);
+<span class="color-source-sql-keyword">call</span> pgxls.set_column_format(xls, border_around=&#62;<span class="color-source-sql-string">'thin'</span>, alignment_horizontal=&#62;<span class="color-source-sql-string">'center'</span>);
 
-<span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format_numeric  (xls, 10, format_code=&#62;<span class="color-source-sql-string">'0.000'</span>);
-<span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format_timestamp(xls, 11, format_code=&#62;<span class="color-source-sql-string">'dd.mm.yyyy hh:mm'</span>);
+<span class="color-source-sql-keyword">call</span> pgxls.set_column_format_numeric  (xls, 10, format_code=&#62;<span class="color-source-sql-string">'0.000'</span>);
+<span class="color-source-sql-keyword">call</span> pgxls.set_column_format_timestamp(xls, 11, format_code=&#62;<span class="color-source-sql-string">'dd.mm.yyyy hh:mm'</span>);
 
-<span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format_integer(xls, 10, format_code=&#62;pgxls.get_format_code_numeric(decimal_places=&#62;0, thousands_separated=&#62;<span class="color-source-sql-keyword">true</span>));
-<span class="color-source-sql-keyword">call</span> pgxls.set_column_default_format_boolean(xls, 11, format_code=&#62;pgxls.get_format_code_boolean(<span class="color-source-sql-string">'Yes'</span>, <span class="color-source-sql-string">'No'</span>, <span class="color-source-sql-string">'Null'</span>));
+<span class="color-source-sql-keyword">call</span> pgxls.set_column_format_integer(xls, 10, format_code=&#62;pgxls.get_format_code_numeric(decimal_places=&#62;0, thousands_separated=&#62;<span class="color-source-sql-keyword">true</span>));
+<span class="color-source-sql-keyword">call</span> pgxls.set_column_format_boolean(xls, 11, format_code=&#62;pgxls.get_format_code_boolean(<span class="color-source-sql-string">'Yes'</span>, <span class="color-source-sql-string">'No'</span>, <span class="color-source-sql-string">'Null'</span>));
 </pre>
 </div>
 

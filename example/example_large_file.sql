@@ -11,7 +11,7 @@ begin
   call pgxls.put_cell(xls, '10 sheets * 4 columns * 100K rows = 40M cells'::text);
   for v_sheet in 1..10 loop
     call pgxls.add_sheet(xls, array[10,10,10,50], array['Sheet','Row','Value','md5'], v_sheet::text);
-    call pgxls.set_column_default_format(xls, 4, font_name=>pgxls.get_font_name('monospace'));
+    call pgxls.set_column_format(xls, 4, font_name=>pgxls.get_font_name('monospace'));
     for v_row in 1..100000 loop          
       v_value := v_sheet*v_row;
       call pgxls.add_row(xls);
@@ -26,8 +26,10 @@ begin
 end
 $$;
 
--- Get large file by parts
--- Each row is a bytea that must be read separately to avoid OutOfMemory error on the client 
--- Example, psql -Aqt -c "select excel_large_file()" | xxd -r -ps > excel_large_file.xlsx
+-- Retrieve a large file in chunks
+-- Each row is a bytea chunk and must be read separately to avoid OutOfMemory error on the client
 select excel_large_file();
 
+-- When using the command line, strip the leading \x from each line using cut before xxd
+-- Example:
+--   psql -Aqt -c "select excel_large_file()" | cut -c3- | xxd -r -p > excel_large_file.xlsx

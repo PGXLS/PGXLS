@@ -131,7 +131,6 @@ do $$ begin
       strings_len int, 
       --
       newline char,
-      trace_len int,
       trace_ts timestamp
     );  
   end if;
@@ -247,18 +246,13 @@ declare
   v_format pgxls._format;
   v_style pgxls._style;
 begin
-  v_xls.newline := chr(10); 
-  if to_regtype('pgxls_temp_file') is null then	
-    create temp sequence if not exists pgxls_id_seq cycle;	
-    create temp table if not exists pgxls_temp_file(xls_id int, name varchar(32), part int, subpart int, body bytea not null);
-  end if; 
-  v_xls.id := nextval('pgxls_id_seq');  
+  v_xls.newline := chr(10);
+  v_xls.id := pgxls._temp_zip_create();
   v_xls.datetime := now();
   call pgxls._build_file$rels(v_xls);
   v_xls.sheets_len := 0;
   v_xls.strings_len := 0;
   call pgxls._create_column_default(v_xls);
-  v_xls.trace_len := 0;
   v_xls.trace_ts := clock_timestamp();
   call pgxls._trace(v_xls, 'create', 'pgxls_version='||pgxls.pgxls_version()||', server_encoding='||current_setting('server_encoding')||', client_encoding='||current_setting('client_encoding'));
   return v_xls;	
@@ -569,7 +563,7 @@ declare
   v_funcs_call text := '';   
 begin
   for v_type in (select * from unnest(array['text','integer','numeric','date','time','timestamp','boolean']) with ordinality as t(name, position)) loop
-      v_func_name := 'pgxls.set_column_default_format_'||v_type.name;
+      v_func_name := 'pgxls.set_column_format_'||v_type.name;
     execute  
       'create or replace procedure '||v_func_name||'(inout xls pgxls.xls, column_ int, format_code varchar default null, '||v_func_params_def||') language plpgsql as $$'||v_newline||
       'declare'||v_newline||
@@ -604,7 +598,7 @@ begin
     v_funcs_call := v_funcs_call || '  call '||v_func_name||'(xls, column_, null, '||v_func_params_call||');'||v_newline;
   end loop; 
   execute
-    'create or replace procedure pgxls.set_column_default_format(inout xls pgxls.xls, column_ int, '||v_func_params_def||') language plpgsql as $$'||v_newline||
+    'create or replace procedure pgxls.set_column_format(inout xls pgxls.xls, column_ int, '||v_func_params_def||') language plpgsql as $$'||v_newline||
     'begin'||v_newline||
     v_funcs_call||
     'end'||v_newline||
@@ -822,7 +816,7 @@ create or replace procedure pgxls.set_row_default_format(
 ) language plpgsql as $$
 begin
   for column_ in 1..xls.columns_len loop
-    call pgxls.set_column_default_format(xls, column_, font_name, font_size, font_bold, null, null, null, font_color, border, null, null, null, null, fill_foreground_color, alignment_horizontal, null, alignment_vertical, alignment_text_wrap);  
+    call pgxls.set_column_format(xls, column_, font_name, font_size, font_bold, null, null, null, font_color, border, null, null, null, null, fill_foreground_color, alignment_horizontal, null, alignment_vertical, alignment_text_wrap);  
   end loop;
 end
 $$;
@@ -894,15 +888,17 @@ $$;
 
 
 create or replace procedure pgxls._build_file(inout xls pgxls.xls) language plpgsql as $$
+declare 
+  v_zip_files varchar[] := pgxls._temp_zip_files(xls.id);
 begin
-  if not exists (select from pgxls_temp_file where xls_id = xls.id and name='_rels/.rels') then
+  if 'docProps/app.xml' = any(v_zip_files) then 
+    return;
+  end if;
+  if '_rels/.rels' != all(v_zip_files) then
     raise exception 'PGSUITE-2006 Temporary table cleared (xls.id = %)', xls.id;
   end if;
   if xls.sheets_len=0 then
     raise exception 'PGSUITE-2007 Sheet not added, call pgxls.add_sheet first';
-  end if;
-  if exists (select from pgxls_temp_file where xls_id = xls.id and name='docProps/app.xml') then
-    return;
   end if;
   call pgxls._trace(xls, '_build_file', 'started');
   call pgxls._build_file$docprops_app(xls);
@@ -913,7 +909,7 @@ begin
   call pgxls._build_file$xl_shared_strings(xls); 
   call pgxls._build_file$xl_workbook(xls);
   call pgxls._build_file$content_types(xls);
-  call pgxls._zip_build(xls);
+  call pgxls._build_zip(xls);
 end
 $$;
 
@@ -922,7 +918,7 @@ declare
   v_file bytea;
 begin
   call pgxls._build_file(xls);	
-  v_file := (select string_agg(body, null order by name collate "C", part, subpart) from pgxls_temp_file where xls_id=xls.id);
+  v_file := (select string_agg(body,null) from pgxls._temp_zip_load(xls.id) body);
   call pgxls.delete_file_data(xls); 
   return v_file;	
 end
@@ -931,13 +927,13 @@ $$;
 create or replace function pgxls.get_query_file_stream(xls pgxls.xls) returns varchar language plpgsql as $$
 begin	
   call pgxls._build_file(xls);
-  return 'select body from pgxls_temp_file where xls_id='||xls.id||' order by name collate "C", part, subpart';
+  return 'select body from pgxls._temp_zip_load('||xls.id||') body';
 end
 $$;
 
 create or replace procedure pgxls.delete_file_data(inout xls pgxls.xls) language plpgsql as $$
 begin
-  delete from pgxls_temp_file where xls_id=xls.id;  
+  call pgxls._temp_zip_delete(xls.id);
 end
 $$;
 
@@ -971,18 +967,11 @@ begin
 end 
 $$;
 
-create or replace procedure pgxls._add_file_subpart(xls_id int, name varchar, part int, subpart int, body text) language plpgsql as $$
-begin
-  insert into pgxls_temp_file(xls_id, name, part, subpart, body) values (xls_id, name, part, subpart, pgxls._zip_utf8_bytea(body));
-end;
-$$; 
-
 create or replace procedure pgxls._trace(inout xls pgxls.xls, proc_name name, log text) language plpgsql as $$
 declare
   v_trace_ts_new timestamp := clock_timestamp();
 begin
-  xls.trace_len := xls.trace_len+1;
-  call pgxls._add_file_subpart(xls.id, 'docProps/core.xml', 2, xls.trace_len,
+  call pgxls._temp_zip_file_append(xls.id, 'docProps/core.xml', 2, 
     '    '||lpad(extract(epoch from v_trace_ts_new-xls.trace_ts)::numeric(10,3)::text,6,'0')||' '||rpad(proc_name, 20)||' '||log||xls.newline
   );
   xls.trace_ts := v_trace_ts_new;
@@ -991,7 +980,7 @@ $$;
 
 create or replace procedure pgxls._build_file$rels(inout xls pgxls.xls) language plpgsql as $$
 begin
-  call pgxls._add_file_subpart(xls.id, '_rels/.rels', 1, 1, 	
+  call pgxls._temp_zip_file_append(xls.id, '_rels/.rels', 1, 	
     '<?xml version="1.0" encoding="UTF-8"?>'||xls.newline||
     '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'||xls.newline||
     '  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'||xls.newline||
@@ -1004,7 +993,7 @@ $$;
 
 create or replace procedure pgxls._build_file$docprops_app(inout xls pgxls.xls) language plpgsql as $$
 begin
-  call pgxls._add_file_subpart(xls.id, 'docProps/app.xml', 1, 1, 	
+  call pgxls._temp_zip_file_append(xls.id, 'docProps/app.xml', 1, 	
     '<?xml version="1.0" encoding="UTF-8"?>'||xls.newline||
     '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'||xls.newline||
     '  <Template></Template>'||xls.newline||
@@ -1019,7 +1008,7 @@ create or replace procedure pgxls._build_file$docprops_core(inout xls pgxls.xls)
 declare
   v_file_datetime varchar(20) := to_char(now(), 'yyyy-mm-ddThh24:mi:ssZ'); 
 begin
-  call pgxls._add_file_subpart(xls.id, 'docProps/core.xml', 1, 1, 	
+  call pgxls._temp_zip_file_append(xls.id, 'docProps/core.xml', 1, 	
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'||xls.newline||
     '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'||xls.newline||
     '  <dcterms:created xsi:type="dcterms:W3CDTF">'||v_file_datetime||'</dcterms:created>'||xls.newline||
@@ -1033,7 +1022,7 @@ begin
     '  <dc:title></dc:title>'||xls.newline||
     '  <!-- trace'||xls.newline    
   );
-  call pgxls._add_file_subpart(xls.id, 'docProps/core.xml', 9, 1, 	
+  call pgxls._temp_zip_file_append(xls.id, 'docProps/core.xml', 9, 	
     '  -->'||xls.newline||
     '</cp:coreProperties>'
   );
@@ -1055,7 +1044,7 @@ begin
   v_body := v_body || 
       '  <Relationship Id="rId'||(xls.sheets_len+2)||'" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml" />'||xls.newline|| 
       '</Relationships>';
-  call pgxls._add_file_subpart(xls.id, 'xl/_rels/workbook.xml.rels', 1, 1, v_body);   
+  call pgxls._temp_zip_file_append(xls.id, 'xl/_rels/workbook.xml.rels', 1, v_body);   
 end
 $$;
 
@@ -1091,7 +1080,7 @@ begin
       end if;
     end if; 
     if v_cell.type='s' and v_cell.value!=''  then   
-      call pgxls._add_file_subpart(xls.id, 'xl/sharedStrings.xml', 2, xls.strings_len,
+      call pgxls._temp_zip_file_append(xls.id, 'xl/sharedStrings.xml', 2, 
         '  <si>'||xmlelement(name "t", xmlattributes('preserve' as "xml:space"), v_cell.value)||'</si>'||xls.newline	
       );    
       v_cell.value := xls.strings_len;
@@ -1099,7 +1088,7 @@ begin
     end if;     
     v_body := v_body || '      <c r="'||xls.columns[v_column].name||xls.rows_len||'" s="'||v_cell.style||'" t="'||v_cell.type||'"><v>'||v_cell.value||'</v></c>'||xls.newline;
   end loop;
-  call pgxls._add_file_subpart(xls.id, xls.sheet_file_name, 2, xls.rows_len,
+  call pgxls._temp_zip_file_append(xls.id, xls.sheet_file_name, 2, 
     '    <row r="'||xls.rows_len||'" customFormat="false" customHeight="'||(xls.row_height is not null or v_row_height>0)||'" ht="'||coalesce(xls.row_height,v_row_height)||'" hidden="false" outlineLevel="0" collapsed="false">'||xls.newline||  
     v_body||
     '    </row>'||xls.newline
@@ -1112,7 +1101,7 @@ $$;
 create or replace procedure pgxls._build_file$xl_worksheets_sheet_merge_cells(inout xls pgxls.xls, column_count int, row_count int, column_ int) language plpgsql as $$
 begin
   xls.cells_merge_len := xls.cells_merge_len+1; 	
-  call pgxls._add_file_subpart(xls.id, xls.sheet_file_name, 4, xls.cells_merge_len, 
+  call pgxls._temp_zip_file_append(xls.id, xls.sheet_file_name, 4,  
     '  <mergeCell ref="'||pgxls.get_column_name(column_)||xls.rows_len||':'||pgxls.get_column_name(column_+column_count-1)||(xls.rows_len+row_count-1)||'"/>'||xls.newline
   );
 end
@@ -1129,11 +1118,11 @@ begin
   if xls.cells is not null then
     call pgxls._build_file$xl_worksheets_sheet_row(xls);          
   end if; 
-  call pgxls._add_file_subpart(xls.id, 'xl/workbook.xml', 2, xls.sheets_len, 
+  call pgxls._temp_zip_file_append(xls.id, 'xl/workbook.xml', 2,  
       '    '||xmlelement(name "sheet", xmlattributes(xls.sheet_name as "name", xls.sheets_len as "sheetId", 'visible' as "state", 'rId'||(xls.sheets_len+1) as "r:id"))||xls.newline
   );
   if v_page.rows_repeat_from is not null then
-    call pgxls._add_file_subpart(xls.id, 'xl/workbook.xml', 4, xls.sheets_len,
+    call pgxls._temp_zip_file_append(xls.id, 'xl/workbook.xml', 4, 
        '    '||replace(xmlelement(name "definedName", xmlattributes('_xlnm.Print_Titles' as "name", (xls.sheets_len-1) as "localSheetId"), quote_literal(xls.sheet_name)||'!$'||v_page.rows_repeat_from||':$'||v_page.rows_repeat_to)::text,'''','&apos;')||xls.newline
     );
   end if;
@@ -1155,13 +1144,13 @@ begin
   v_body := v_body || 
     '  </cols>'||xls.newline||
     '  <sheetData>'||xls.newline;     
-  call pgxls._add_file_subpart(xls.id, xls.sheet_file_name, 1, 1, v_body);
-  call pgxls._add_file_subpart(xls.id, xls.sheet_file_name, 3, 1, '  </sheetData>'||xls.newline);
+  call pgxls._temp_zip_file_append(xls.id, xls.sheet_file_name, 1, v_body);
+  call pgxls._temp_zip_file_append(xls.id, xls.sheet_file_name, 3, '  </sheetData>'||xls.newline);
   if xls.cells_merge_len>0 then
-    call pgxls._add_file_subpart(xls.id, xls.sheet_file_name, 3, 9, '  <mergeCells count="1">'||xls.newline);  
-    call pgxls._add_file_subpart(xls.id, xls.sheet_file_name, 5, 1, '  </mergeCells>'||xls.newline);
+    call pgxls._temp_zip_file_append(xls.id, xls.sheet_file_name, 3, '  <mergeCells count="1">'||xls.newline);  
+    call pgxls._temp_zip_file_append(xls.id, xls.sheet_file_name, 5, '  </mergeCells>'||xls.newline);
   end if;
-  call pgxls._add_file_subpart(xls.id, xls.sheet_file_name, 9, 9,
+  call pgxls._temp_zip_file_append(xls.id, xls.sheet_file_name, 9,
     '  <printOptions headings="false" gridLines="false" gridLinesSet="true" horizontalCentered="false" verticalCentered="false"/>'||xls.newline||
     '  <pageMargins'||xls.newline||
     '    left   = "'||v_page.margin_left||'"'||xls.newline||
@@ -1195,11 +1184,11 @@ create or replace procedure pgxls._build_file$xl_shared_strings(inout xls pgxls.
 declare
   v_file_name varchar := 'xl/sharedStrings.xml'; 
 begin
-  call pgxls._add_file_subpart(xls.id, v_file_name, 1, 1,   		
+  call pgxls._temp_zip_file_append(xls.id, v_file_name, 1,   		
     '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>'||xls.newline|| 
     '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="'||xls.strings_len||'" uniqueCount="'||xls.strings_len||'">'||xls.newline
   );
-  call pgxls._add_file_subpart(xls.id, v_file_name, 9, 1, 
+  call pgxls._temp_zip_file_append(xls.id, v_file_name, 9, 
     '</sst>'
   );  		
  end
@@ -1283,7 +1272,7 @@ begin
     '    <cellStyle name="Normal" xfId="0" builtinId="0"/>'||xls.newline||
     '  </cellStyles>'||xls.newline||
     '</styleSheet>';
-  call pgxls._add_file_subpart(xls.id, 'xl/styles.xml', 1, 1, v_body);
+  call pgxls._temp_zip_file_append(xls.id, 'xl/styles.xml', 1, v_body);
 end
 $$;
 
@@ -1291,7 +1280,7 @@ create or replace procedure pgxls._build_file$xl_workbook(inout xls pgxls.xls) l
 declare
   v_file_name varchar := 'xl/workbook.xml';
 begin
-  call pgxls._add_file_subpart(xls.id, v_file_name, 1, 1,
+  call pgxls._temp_zip_file_append(xls.id, v_file_name, 1,
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'||xls.newline||    
     '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'||xls.newline||
     '  <fileVersion appName="PGXLS version '||pgxls.pgxls_version()||'" />'||xls.newline||
@@ -1302,11 +1291,11 @@ begin
     '  </bookViews>'||xls.newline||
     '  <sheets>'||xls.newline
   );
-  call pgxls._add_file_subpart(xls.id, v_file_name, 3, 1,
+  call pgxls._temp_zip_file_append(xls.id, v_file_name, 3,
     '  </sheets>'||xls.newline||
     '  <definedNames>'||xls.newline
   );
-  call pgxls._add_file_subpart(xls.id, v_file_name, 9, 1,
+  call pgxls._temp_zip_file_append(xls.id, v_file_name, 9,
     '  </definedNames>'||xls.newline||    
     '  <calcPr iterateCount="100" refMode="A1" iterate="false" iterateDelta="0.001"/>'||xls.newline||
     '</workbook>'
@@ -1338,11 +1327,11 @@ begin
     '  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'||xls.newline||
     '  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'||xls.newline||
     '</Types>';
-  call pgxls._add_file_subpart(xls.id, '[Content_Types].xml', 1, 1, v_body);   
+  call pgxls._temp_zip_file_append(xls.id, '[Content_Types].xml', 1, v_body);   
 end
 $$;
 
-create or replace procedure pgxls._zip_add_int(inout zip bytea, bytes int, value bigint) language plpgsql as $$
+create or replace procedure pgxls._build_zip_add_int(inout zip bytea, bytes int, value bigint) language plpgsql as $$
 declare 
   value_text varchar := '\x';
 begin
@@ -1354,7 +1343,7 @@ begin
 end
 $$;
 
-create or replace function pgxls._zip_utf8_bytea(value text) returns bytea language plpgsql as $$
+create or replace function pgxls._build_zip_utf8(value text) returns bytea language plpgsql as $$
 declare
   server_encoding varchar := (select pg_encoding_to_char(encoding) from pg_database where datname=current_database());
   value_binary bytea := decode(replace(value, '\', '\\'), 'escape');
@@ -1364,86 +1353,140 @@ begin
 end;
 $$;
 
-create or replace procedure pgxls._zip_build(inout xls pgxls.xls) language plpgsql as $$
+create or replace procedure pgxls._build_zip(inout xls pgxls.xls) language plpgsql as $$
 declare
-  v_file record;
+  v_file_name varchar;
   v_file_count int := 0;
   v_zip_len bigint := 0;
   v_cd_len int := 0;
   v_zip_cde bytea; 
   v_datetime bigint;
 begin
-  call pgxls._trace(xls, '_zip_build', 'started'); 
+  call pgxls._trace(xls, '_build_zip', 'started'); 
   v_datetime := ((extract(year from xls.datetime)-1980)::int<<9) | (extract(month from xls.datetime)::int<<5) | extract(day from xls.datetime)::int; 
-  v_datetime := (v_datetime<<16) | ((extract(hour from xls.datetime))::int<<11) | ((extract(minute from xls.datetime))::int<<5)  | ((extract(seconds from xls.datetime)/2)::int);	
-  for v_file in (select name from (select distinct name from pgxls_temp_file where xls_id=xls.id) f order by name collate "C") loop
-    call pgxls._zip_build_file(xls.id, v_file.name, v_datetime, v_file_count, v_zip_len, v_cd_len);
+  v_datetime := (v_datetime<<16) | ((extract(hour from xls.datetime))::int<<11) | ((extract(minute from xls.datetime))::int<<5)  | ((extract(seconds from xls.datetime)/2)::int);
+  foreach v_file_name in array pgxls._temp_zip_files(xls.id) loop	
+    call pgxls._build_zip_file(xls.id, v_file_name, v_datetime, v_file_count, v_zip_len, v_cd_len);
   end loop;
-  v_zip_cde:='\x504B0506'::bytea;  -- signature
-  call pgxls._zip_add_int(v_zip_cde, 2, 0); -- diskNumber
-  call pgxls._zip_add_int(v_zip_cde, 2, 0); -- startDiskNumber
-  call pgxls._zip_add_int(v_zip_cde, 2, v_file_count); -- numberCentralDirectoryRecord  
-  call pgxls._zip_add_int(v_zip_cde, 2, v_file_count); -- totalCentralDirectoryRecord
-  call pgxls._zip_add_int(v_zip_cde, 4, v_cd_len); -- sizeOfCentralDirectory  
-  call pgxls._zip_add_int(v_zip_cde, 4, v_zip_len); -- centralDirectoryOffset
-  call pgxls._zip_add_int(v_zip_cde, 2, 0); -- commentLength
-  insert into pgxls_temp_file(xls_id, name, part, subpart, body) values (xls.id, '~~zip_cde', 1, 1, v_zip_cde); 
+  v_zip_cde:='\x504B0506'::bytea;                            -- signature
+  call pgxls._build_zip_add_int(v_zip_cde, 2, 0);            -- diskNumber
+  call pgxls._build_zip_add_int(v_zip_cde, 2, 0);            -- startDiskNumber
+  call pgxls._build_zip_add_int(v_zip_cde, 2, v_file_count); -- numberCentralDirectoryRecord  
+  call pgxls._build_zip_add_int(v_zip_cde, 2, v_file_count); -- totalCentralDirectoryRecord
+  call pgxls._build_zip_add_int(v_zip_cde, 4, v_cd_len);     -- sizeOfCentralDirectory  
+  call pgxls._build_zip_add_int(v_zip_cde, 4, v_zip_len);    -- centralDirectoryOffset
+  call pgxls._build_zip_add_int(v_zip_cde, 2, 0);             -- commentLength
+  call pgxls._temp_zip_file_append(xls.id, '~~zip_cde', 1, v_zip_cde);
 end
 $$;
 
-create or replace procedure pgxls._zip_build_file(xls_id int, file_name varchar, datetime bigint, inout file_count int, inout zip_len bigint, inout cd_len int) language plpgsql as $$
+create or replace procedure pgxls._build_zip_file(xls_id int, file_name varchar, datetime bigint, inout file_count int, inout zip_len bigint, inout cd_len int) language plpgsql as $$
 declare
   v_xls_id int := xls_id;
   v_file_subpart record;
   v_zip bytea;
   v_offset bigint := zip_len;
-  v_len bigint := 0;
-  v_crc bigint := 4294967295;
+  v_len bigint;
+  v_crc bigint;
 begin
   file_count := file_count+1;
-  for v_file_subpart in (select body from pgxls_temp_file f where f.xls_id=v_xls_id and f.name=file_name order by part, subpart) loop
-    v_len := v_len+length(v_file_subpart.body);
+  call pgxls._temp_zip_file_info(xls_id, file_name, v_len, v_crc);
+  v_zip:='\x504B0304'::bytea;
+  call pgxls._build_zip_add_int(v_zip, 2, 10);
+  call pgxls._build_zip_add_int(v_zip, 2, 0);
+  call pgxls._build_zip_add_int(v_zip, 2, 0);    
+  call pgxls._build_zip_add_int(v_zip, 4, datetime); 
+  call pgxls._build_zip_add_int(v_zip, 4, v_crc);
+  call pgxls._build_zip_add_int(v_zip, 4, v_len);
+  call pgxls._build_zip_add_int(v_zip, 4, v_len);
+  call pgxls._build_zip_add_int(v_zip, 2, length(file_name));
+  call pgxls._build_zip_add_int(v_zip, 2, 0);
+  v_zip := v_zip || pgxls._build_zip_utf8(file_name); 
+  call pgxls._temp_zip_file_append(v_xls_id, file_name, 0, v_zip);
+  zip_len:=zip_len+v_len+length(v_zip); 
+  v_zip:='\x504B0102'::bytea;
+  call pgxls._build_zip_add_int(v_zip, 2, 10);  
+  call pgxls._build_zip_add_int(v_zip, 2, 10);
+  call pgxls._build_zip_add_int(v_zip, 2, 0);
+  call pgxls._build_zip_add_int(v_zip, 2, 0);
+  call pgxls._build_zip_add_int(v_zip, 4, datetime);
+  call pgxls._build_zip_add_int(v_zip, 4, v_crc);
+  call pgxls._build_zip_add_int(v_zip, 4, v_len);
+  call pgxls._build_zip_add_int(v_zip, 4, v_len);
+  call pgxls._build_zip_add_int(v_zip, 2, length(file_name));
+  call pgxls._build_zip_add_int(v_zip, 2, 0);
+  call pgxls._build_zip_add_int(v_zip, 2, 0);
+  call pgxls._build_zip_add_int(v_zip, 2, 0);
+  call pgxls._build_zip_add_int(v_zip, 2, 0);
+  call pgxls._build_zip_add_int(v_zip, 4, 0);
+  call pgxls._build_zip_add_int(v_zip, 4, v_offset);
+  v_zip := v_zip || pgxls._build_zip_utf8(file_name);
+  call pgxls._temp_zip_file_append(v_xls_id, '~zip_cdf', file_count, v_zip);
+  cd_len := cd_len+length(v_zip);
+end;	
+$$;
+
+create or replace function pgxls._temp_zip_create() returns int language plpgsql as $$
+begin
+  if to_regtype('pgxls_temp_zip_file') is null then	
+    create temp sequence if not exists pgxls_id_seq cycle;
+    create temp table if not exists pgxls_temp_zip_file(xls_id int, name varchar(32), part int, subpart bigserial, body bytea not null);
+  end if; 
+  return nextval('pgxls_id_seq'); 
+end
+$$;
+
+create or replace procedure pgxls._temp_zip_delete(xls_id int) language plpgsql as $$
+begin
+  delete from pgxls_temp_zip_file zf where zf.xls_id=_temp_zip_delete.xls_id;  
+end
+$$;
+
+create or replace procedure pgxls._temp_zip_file_append(xls_id int, name varchar, part int, body bytea) language plpgsql as $$
+begin
+  insert into pgxls_temp_zip_file(xls_id, name, part, body) values (xls_id, name, part, body);
+end;
+$$;
+
+create or replace procedure pgxls._temp_zip_file_append(xls_id int, name varchar, part int, body text) language plpgsql as $$
+begin
+  call pgxls._temp_zip_file_append(xls_id, name, part, pgxls._build_zip_utf8(body));
+end;
+$$;
+
+create or replace function pgxls._temp_zip_load(xls_id int) returns setof bytea language plpgsql as $$
+begin
+  return query execute 'select body from pgxls_temp_zip_file where xls_id='||xls_id||' order by name collate "C", part, subpart';  
+end;
+$$; 
+
+create or replace function pgxls._temp_zip_files(xls_id int) returns varchar[] language plpgsql as $$
+begin
+  return (
+    select coalesce(array_agg(distinct name collate "C" order by name collate "C"),array[]::varchar[])
+      from pgxls_temp_zip_file zf
+      where zf.xls_id=_temp_zip_files.xls_id
+  );
+end;  
+$$; 
+
+create or replace procedure pgxls._temp_zip_file_info(xls_id int, name varchar, inout len bigint, inout crc bigint) language plpgsql as $$
+declare
+  v_file_subpart record;
+begin
+  len := 0;
+  crc := 4294967295;
+  for v_file_subpart in (select body from pgxls_temp_zip_file f where f.xls_id=_temp_zip_file_info.xls_id and f.name=_temp_zip_file_info.name order by part, subpart) loop
+    len := len+length(v_file_subpart.body);
     for i in 0..length(v_file_subpart.body)-1 loop
-        v_crc = (v_crc # get_byte(v_file_subpart.body, i))::bigint;
+        crc = (crc # get_byte(v_file_subpart.body, i))::bigint;
         for j in 1..8 loop
-            v_crc := ((v_crc >> 1) # (3988292384 * (v_crc & 1)))::bigint;
+            crc := ((crc >> 1) # (3988292384 * (crc & 1)))::bigint;
         end loop;
     end loop;       
   end loop;
-  v_crc := v_crc # 4294967295;
-  v_zip:='\x504B0304'::bytea;
-  call pgxls._zip_add_int(v_zip, 2, 10);
-  call pgxls._zip_add_int(v_zip, 2, 0);
-  call pgxls._zip_add_int(v_zip, 2, 0);    
-  call pgxls._zip_add_int(v_zip, 4, datetime); 
-  call pgxls._zip_add_int(v_zip, 4, v_crc);
-  call pgxls._zip_add_int(v_zip, 4, v_len);
-  call pgxls._zip_add_int(v_zip, 4, v_len);
-  call pgxls._zip_add_int(v_zip, 2, length(file_name));
-  call pgxls._zip_add_int(v_zip, 2, 0);
-  v_zip := v_zip || pgxls._zip_utf8_bytea(file_name); 
-  insert into pgxls_temp_file(xls_id, name, part, subpart, body) values (v_xls_id, file_name, 0, 1, v_zip);
-  zip_len:=zip_len+v_len+length(v_zip); 
-  v_zip:='\x504B0102'::bytea;
-  call pgxls._zip_add_int(v_zip, 2, 10);  
-  call pgxls._zip_add_int(v_zip, 2, 10);
-  call pgxls._zip_add_int(v_zip, 2, 0);
-  call pgxls._zip_add_int(v_zip, 2, 0);
-  call pgxls._zip_add_int(v_zip, 4, datetime);
-  call pgxls._zip_add_int(v_zip, 4, v_crc);
-  call pgxls._zip_add_int(v_zip, 4, v_len);
-  call pgxls._zip_add_int(v_zip, 4, v_len);
-  call pgxls._zip_add_int(v_zip, 2, length(file_name));
-  call pgxls._zip_add_int(v_zip, 2, 0);
-  call pgxls._zip_add_int(v_zip, 2, 0);
-  call pgxls._zip_add_int(v_zip, 2, 0);
-  call pgxls._zip_add_int(v_zip, 2, 0);
-  call pgxls._zip_add_int(v_zip, 4, 0);
-  call pgxls._zip_add_int(v_zip, 4, v_offset);
-  v_zip := v_zip || pgxls._zip_utf8_bytea(file_name);
-  insert into pgxls_temp_file(xls_id, name, part, subpart, body) values (v_xls_id, '~zip_cdf', file_count, 1, v_zip); 
-  cd_len := cd_len+length(v_zip);
-end;	
+  crc := crc # 4294967295;
+end;  
 $$;
 
 grant usage on schema pgxls to public;

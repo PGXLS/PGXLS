@@ -25,9 +25,9 @@ begin
   -- Add sheet named "Columns"
   call pgxls.add_sheet(xls, array[10,15,50], array['x','x/3','md5(x)'], 'Columns');
   -- Set format of column for numeric type 
-  call pgxls.set_column_default_format_numeric(xls, 2, format_code=>'0.0000', font_name=>pgxls.get_font_name('sans_serif'));
+  call pgxls.set_column_format_numeric(xls, 2, format_code=>'0.0000', font_name=>pgxls.get_font_name('sans_serif'));
   -- Set alignment of column for all types
-  call pgxls.set_column_default_format(xls, 3, alignment_horizontal=>'center');
+  call pgxls.set_column_format(xls, 3, alignment_horizontal=>'center');
   -- Set cell values, style defined by column and data type
   for x in 1..10 loop
     call pgxls.add_row(xls);
@@ -50,8 +50,8 @@ begin
   --------------------------------------------------------------------------------------------------------------------------------
   -- Add sheet with wrap text
   call pgxls.add_sheet(xls, array[40,30], name=>'Wrap text');
-  call pgxls.set_column_default_format(xls, 1, alignment_horizontal=>'justify', alignment_text_wrap=>true);
-  call pgxls.set_column_default_format(xls, 2, alignment_text_wrap=>true); 
+  call pgxls.set_column_format(xls, 1, alignment_horizontal=>'justify', alignment_text_wrap=>true);
+  call pgxls.set_column_format(xls, 2, alignment_text_wrap=>true); 
   -- Text without line feed
   call pgxls.put_cell_text(xls, 'A database management system used to maintain relational databases is a relational database management system (RDBMS)');
   call pgxls.put_cell(xls, 'Row height calculated with assumptions and may be not optimal, usually line count is slightly larger'::text, font_size=>8); 
@@ -73,8 +73,8 @@ begin
   call pgxls.set_row_default_format(xls, border=>'thin');
   call pgxls.add_row_texts(xls, array['x','√x','x²','md5(x)'], font_bold=>true, fill_foreground_color=>'dark_gray', alignment_horizontal=>'center');
   call pgxls.set_row_default_format(xls, fill_foreground_color=>'light_gray');
-  call pgxls.set_column_default_format_numeric(xls, 2, format_code=>'0.0000');
-  call pgxls.set_column_default_format(xls, 4, alignment_horizontal=>'center');
+  call pgxls.set_column_format_numeric(xls, 2, format_code=>'0.0000');
+  call pgxls.set_column_format(xls, 4, alignment_horizontal=>'center');
   for x in 1..100 loop
     call pgxls.add_row(xls);
     call pgxls.put_cell(xls, x);
